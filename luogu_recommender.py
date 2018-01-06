@@ -1,6 +1,6 @@
 import pymysql
 import pymysql.cursors
-import sys, os, pickle
+import sys, os, pickle, math
 import numpy as np
 import matplotlib.pyplot as plt
 from config import *
@@ -8,6 +8,7 @@ from config import *
 
 pub_upids_dict = {}
 pub_upids_list = []
+pub_difficulty_list = []
 rec_matrix = None
 
 def print_error(str):
@@ -33,15 +34,17 @@ def train():
     try:
         # get all public problems
         with connection.cursor() as cursor:
-            sql = "select upid from problem where type=1"
+            sql = "select upid, difficulty from problem where type=1"
             cursor.execute(sql)
             pub_upids = cursor.fetchall()
         pLen = len(pub_upids)
         pub_upids_dict = {}
         pub_upids_list = []
+        pub_difficulty_list = []
         for i in range(pLen):
             pub_upids_list.append(pub_upids[i][0])
             pub_upids_dict[pub_upids[i][0]] = i
+            pub_difficulty_list.append(pub_upids[i][1])
         assert(pLen == len(pub_upids_dict))
         assert(pLen == len(pub_upids_list))
         print_log("Found {} public problems\n".format(pLen))
@@ -75,12 +78,18 @@ def train():
                         num_pairs += 1
         print_log("Found {} valid record pairs\n".format(num_pairs))
         
+        for i in range(pLen):
+            max_value = np.max(rec_matrix[i,:])
+            if max_value > 0:
+                rec_matrix[i,:] = rec_matrix[i,:] / max_value
+        
         f = open(REC_MATRIX_FILE, "wb")
         pickle.dump(rec_matrix, f)
         pickle.dump(pub_upids_list, f)
         pickle.dump(pub_upids_dict, f)
+        pickle.dump(pub_difficulty_list, f)
         f.close()
-        print_log("Finished training")
+        print_log("Finished training\n")
 
     finally:
         connection.close()
@@ -97,7 +106,7 @@ Recommend the suitable problems for the user to do.
     * the list of suggested problems, starting from the best
 """
 def recommend(history, num = -1, remove = []):
-    global rec_matrix, pub_upids_list, pub_upids_dict
+    global rec_matrix, pub_upids_list, pub_upids_dict, pub_difficulty_list
     if not pub_upids_list:
         if not os.path.isfile(REC_MATRIX_FILE):
             print_error("Please run function `train` first")
@@ -106,6 +115,7 @@ def recommend(history, num = -1, remove = []):
         rec_matrix = pickle.load(f)
         pub_upids_list = pickle.load(f)
         pub_upids_dict = pickle.load(f)
+        pub_difficulty_list = pickle.load(f)
         f.close()
         
     remove_dict = {}
@@ -119,9 +129,25 @@ def recommend(history, num = -1, remove = []):
             filtered_history.append(p)
             remove_dict[p] = True
     
+    difficulty_sum = 0
+    difficulty_num = 0
+    for i in range(len(filtered_history)):
+        if pub_difficulty_list[pub_upids_dict[filtered_history[i]]] is not None and pub_difficulty_list[pub_upids_dict[filtered_history[i]]] > 0:
+            difficulty_sum += pub_difficulty_list[pub_upids_dict[filtered_history[i]]]
+            difficulty_num += 1
+    if difficulty_num > 0:
+        difficulty_mean = DIFFICULTY_ARGUMENT_FACTOR * difficulty_sum / difficulty_num
+    else:
+        difficulty_mean = -1
+    
     score = np.zeros((len(pub_upids_list), ))
     for i in range(len(filtered_history)):
         score += rec_matrix[pub_upids_dict[filtered_history[i]]][:] * (DECAY_RATE ** i)
+    
+    if difficulty_mean != -1:
+        for i in range(len(pub_upids_list)):
+            if pub_difficulty_list[i] is not None and pub_difficulty_list[i] > 0:
+                score[i] *= DIFFICULTY_EXP_MIN + math.exp(-DIFFICULTY_EXP_ALPHA * abs(difficulty_mean - pub_difficulty_list[i])) * (1 - DIFFICULTY_EXP_MIN)
     
     recommendation = []
     ids = np.argsort(-score)
