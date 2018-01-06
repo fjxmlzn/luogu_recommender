@@ -25,11 +25,11 @@ Train recommendation parameters, which is saved in REC_MATRIX_FILE.
 """
 def train():
     connection=pymysql.connect(host = HOST,
-                                user = USER,
-                                password = PASSWORD,
-                                db = DB,
-                                port = PORT,
-                                charset = CHARSET)
+                               user = USER,
+                               password = PASSWORD,
+                               db = DB,
+                               port = PORT,
+                               charset = CHARSET)
     try:
         # get all public problems
         with connection.cursor() as cursor:
@@ -90,11 +90,13 @@ def train():
 Recommend the suitable problems for the user to do.
 - Input: 
     * the list of recent problems that the user did, from the latest to the oldest
+      <those problems will not exist in the output list>
     * number of returned problems. -1 suggests all
+    * other problems that should not exist in the output list
 - Output: 
     * the list of suggested problems, starting from the best
 """
-def recommend(history, num = -1):
+def recommend(history, num = -1, remove = []):
     global rec_matrix, pub_upids_list, pub_upids_dict
     if not pub_upids_list:
         if not os.path.isfile(REC_MATRIX_FILE):
@@ -106,11 +108,16 @@ def recommend(history, num = -1):
         pub_upids_dict = pickle.load(f)
         f.close()
         
+    remove_dict = {}
+    for p in remove:
+        remove_dict[p] = True
+        
     filtered_history = []
     for p in history:
         if p in pub_upids_dict \
         and (not filtered_history or filtered_history[-1] != p):
             filtered_history.append(p)
+            remove_dict[p] = True
     
     score = np.zeros((len(pub_upids_list), ))
     for i in range(len(filtered_history)):
@@ -121,6 +128,8 @@ def recommend(history, num = -1):
     for id in ids:
         if (score[id] == 0):
             break
+        if pub_upids_list[id] in remove_dict:
+            continue
         recommendation.append(pub_upids_list[id])
     
     if num == -1:
@@ -136,11 +145,11 @@ Validate the recommendation results on all records.
 """
 def validate():
     connection=pymysql.connect(host = HOST,
-                                user = USER,
-                                password = PASSWORD,
-                                db = DB,
-                                port = PORT,
-                                charset = CHARSET)
+                               user = USER,
+                               password = PASSWORD,
+                               db = DB,
+                               port = PORT,
+                               charset = CHARSET)
     try:
         # get all users
         with connection.cursor() as cursor:
