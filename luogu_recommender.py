@@ -1,6 +1,6 @@
 import pymysql
 import pymysql.cursors
-import sys, os, pickle, math
+import sys, os, pickle, math, time
 import numpy as np
 import matplotlib.pyplot as plt
 from config import *
@@ -98,7 +98,8 @@ def train():
 """
 Recommend the suitable problems for the user to do.
 - Input: 
-    * the list of recent problems that the user did, from the latest to the oldest
+    * the list of recent problems that the user did in format of (upid, timestamp)
+      from the latest to the oldest
       <those problems will not exist in the output list>
     * number of returned problems. -1 suggests all
     * other problems that should not exist in the output list
@@ -107,6 +108,11 @@ Recommend the suitable problems for the user to do.
 """
 def recommend(history, num = -1, remove = []):
     global rec_matrix, pub_upids_list, pub_upids_dict, pub_difficulty_list
+    current_time = time.time()
+    
+    def get_weight(time_difference):
+        return DECAY_RATE ** (time_difference / DECAY_TIME)
+    
     if not pub_upids_list:
         if not os.path.isfile(REC_MATRIX_FILE):
             print_error("Please run function `train` first")
@@ -123,26 +129,28 @@ def recommend(history, num = -1, remove = []):
         remove_dict[p] = True
         
     filtered_history = []
-    for p in history:
+    for (p, t) in history:
         if p in pub_upids_dict \
-        and (not filtered_history or filtered_history[-1] != p):
-            filtered_history.append(p)
+        and (not filtered_history or filtered_history[-1][0] != p):
+            filtered_history.append((p, t))
             remove_dict[p] = True
     
     difficulty_sum = 0
     difficulty_num = 0
-    for i in range(len(filtered_history)):
-        if pub_difficulty_list[pub_upids_dict[filtered_history[i]]] is not None and pub_difficulty_list[pub_upids_dict[filtered_history[i]]] > 0:
-            difficulty_sum += pub_difficulty_list[pub_upids_dict[filtered_history[i]]]
-            difficulty_num += 1
+    for (p, t) in filtered_history:
+        if pub_difficulty_list[pub_upids_dict[p]] is not None\
+        and pub_difficulty_list[pub_upids_dict[p]] > 0:
+            weight = get_weight(current_time - t)
+            difficulty_sum += pub_difficulty_list[pub_upids_dict[p]] * weight
+            difficulty_num += weight
     if difficulty_num > 0:
         difficulty_mean = DIFFICULTY_ARGUMENT_FACTOR * difficulty_sum / difficulty_num
     else:
         difficulty_mean = -1
     
     score = np.zeros((len(pub_upids_list), ))
-    for i in range(len(filtered_history)):
-        score += rec_matrix[pub_upids_dict[filtered_history[i]]][:] * (DECAY_RATE ** i)
+    for (p, t) in filtered_history:
+        score += rec_matrix[pub_upids_dict[p]][:] * get_weight(current_time - t)
     
     if difficulty_mean != -1:
         for i in range(len(pub_upids_list)):
@@ -192,21 +200,21 @@ def validate():
             single_scores = []
             
             with connection.cursor() as cursor:
-                sql = "select upid from record where `uid` = %s order by rid asc"
+                sql = "select upid, submittime from record where `uid` = %s order by rid asc"
                 cursor.execute(sql, uids[i])
                 upids = cursor.fetchall()
                 
             filtered_upids_list = []
             for upid in upids:
                 if not filtered_upids_list or filtered_upids_list[-1] != upid[0]:
-                    filtered_upids_list.append(upid[0])
+                    filtered_upids_list.append((upid[0], upid[1]))
                 
             for j in range(HISTORY_LENGTH, len(filtered_upids_list) - 1):
                 t = filtered_upids_list[j - HISTORY_LENGTH : j]
                 t.reverse()
                 result = recommend(t)
-                if filtered_upids_list[j] in result:
-                    score = result.index(filtered_upids_list[j]) + 1
+                if filtered_upids_list[j][0] in result:
+                    score = result.index(filtered_upids_list[j][0]) + 1
                     single_scores.append(score)
             print_log("Processing {} / {}: {} ({} records)\n".format(i, uLen, "N/A" if len(single_scores) == 0 else np.mean(single_scores), len(single_scores)))
             
